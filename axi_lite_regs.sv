@@ -3,9 +3,9 @@ module axi_lite_regs (
     input  logic        ARESETN,
 
     // AXI4-Lite write address
-    input  logic [31:0] S_AXI_AWADDR,
-    input  logic        S_AXI_AWVALID,
-    output logic        S_AXI_AWREADY,
+    input  logic [31:0] S_AXI_AWADDR, //These are the Write channels. 
+    input  logic        S_AXI_AWVALID,//The S_ stands for Slave 
+    output logic        S_AXI_AWREADY,//(your hardware is the slave to the CPU master).
 
     // AXI4-Lite write data
     input  logic [31:0] S_AXI_WDATA,

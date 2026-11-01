@@ -1,0 +1,293 @@
+// =========================================================================
+// MODULE: axi_lite_regs
+// PURPOSE: This is the "Bank Vault" for the DMA. The CPU (Master) uses the 
+// AXI4-Lite protocol to talk to this vault to configure the DMA and check its status.
+// =========================================================================
+module axi_lite_regs (
+    // --- System Signals ---
+    input  logic        ACLK,       // The main clock. Everything happens on the rising edge of this.
+    input  logic        ARESETN,    // Active-LOW reset. When this is 0, the whole vault is wiped clean.
+
+    // --- AXI4-Lite Write Address (AW) Channel ---
+    input  logic [31:0] S_AXI_AWADDR,  // The address the CPU wants to write to (e.g., 0x04).
+    input  logic        S_AXI_AWVALID, // The CPU says: "My address is ready!"
+    output logic        S_AXI_AWREADY, // The DMA replies: "I am ready to take your address."
+
+    // --- AXI4-Lite Write Data (W) Channel ---
+    input  logic [31:0] S_AXI_WDATA,   // The actual 32-bit data the CPU wants to write.
+    input  logic [3:0]  S_AXI_WSTRB,   // Write Strobe: Tells us WHICH bytes to update (e.g., 1111 = all, 0001 = only byte 0).
+    input  logic        S_AXI_WVALID,  // The CPU says: "My data is ready!"
+    output logic        S_AXI_WREADY,  // The DMA replies: "I am ready to take your data."
+
+    // --- AXI4-Lite Write Response (B) Channel ---
+    output logic [1:0]  S_AXI_BRESP,   // The "Receipt". 2'b00 = OKAY, 2'b10 = Error (SLVERR).
+    output logic        S_AXI_BVALID,  // The DMA says: "I finished the write, here is your receipt!"
+    input  logic        S_AXI_BREADY,  // The CPU says: "I am ready to take the receipt."
+
+    // --- AXI4-Lite Read Address (AR) Channel ---
+    input  logic [31:0] S_AXI_ARADDR,  // The address the CPU wants to read from (e.g., 0x10).
+    input  logic        S_AXI_ARVALID, // The CPU says: "My read address is ready!"
+    output logic        S_AXI_ARREADY, // The DMA replies: "I am ready to look at that address."
+
+    // --- AXI4-Lite Read Data/Response (R) Channel ---
+    output logic [31:0] S_AXI_RDATA,   // The data the DMA is sending back to the CPU.
+    output logic [1:0]  S_AXI_RRESP,   // The read receipt. 2'b00 = OKAY, 2'b10 = Error.
+    output logic        S_AXI_RVALID,  // The DMA says: "I finished reading, here is your data!"
+    input  logic        S_AXI_RREADY,  // The CPU says: "I am ready to take the data."
+
+    // --- DMA Configuration Outputs (Going to the DMA Engine) ---
+    output logic        dma_start,       // Tells the DMA engine to start moving data.
+    output logic [31:0] source_addr,     // Where to read data from.
+    output logic [31:0] dest_addr,       // Where to write data to.
+    output logic [31:0] transfer_length, // How many words to move.
+
+    // --- DMA Status Inputs (Coming from the DMA Engine) ---
+    input  logic        dma_busy,    // Is the DMA currently moving data?
+    input  logic        dma_done,    // Did the DMA finish its job?
+    input  logic        dma_error,   // Did the DMA hit an error?
+    input  logic        irq_status   // Interrupt Request: Is the DMA trying to get the CPU's attention?
+);
+
+    // --- REGISTER MAP (Addresses) ---
+    // These are the "Box Numbers" the CPU uses to find specific data.
+    localparam [31:0] REG_CONTROL = 32'h00; // Address 0x00
+    localparam [31:0] REG_SOURCE  = 32'h04; // Address 0x04
+    localparam [31:0] REG_DEST    = 32'h08; // Address 0x08
+    localparam [31:0] REG_LENGTH  = 32'h0C; // Address 0x0C
+    localparam [31:0] REG_STATUS  = 32'h10; // Address 0x10
+    localparam [31:0] REG_IRQ     = 32'h14; // Address 0x14
+
+    // --- RESPONSE CODES ---
+    localparam [1:0] RESP_OKAY   = 2'b00; // Everything worked perfectly.
+    localparam [1:0] RESP_SLVERR = 2'b10; // Slave Error: The CPU asked for an invalid address.
+
+    // --- INTERNAL MEMORY (The actual storage boxes) ---
+    logic [31:0] control_reg; // Stores the CONTROL data
+    logic [31:0] source_reg;  // Stores the SOURCE_ADDR data
+    logic [31:0] dest_reg;    // Stores the DEST_ADDR data
+    logic [31:0] length_reg;  // Stores the LENGTH data
+
+    // --- INDEPENDENT AW/W WAITING ROOM ---
+    // Because Address (AW) and Data (W) can arrive at different times, we need a place to hold them.
+    logic [31:0] saved_addr;  // Holds the address if it arrives first.
+    logic [31:0] saved_data;  // Holds the data if it arrives first.
+    logic [3:0]  saved_strb;  // Holds the strobe if data arrives first.
+    logic        addr_saved;  // Flag: 1 means "We have the address sitting in the waiting room."
+    logic        data_saved;  // Flag: 1 means "We have the data sitting in the waiting room."
+
+    // --- CURRENT TRANSACTION VALUES ---
+    // These figure out if we should use the newly arrived data or the saved data.
+    logic [31:0] selected_addr; 
+    logic [31:0] selected_data; 
+    logic [3:0]  selected_strb; 
+
+    // --- HANDSHAKE FLAGS ---
+    logic addr_handshake;      // Becomes 1 when AWVALID and AWREADY are both 1.
+    logic data_handshake;      // Becomes 1 when WVALID and WREADY are both 1.
+    logic write_ready_to_commit; // Becomes 1 when we have BOTH address and data, and are ready to write.
+
+    // --- EXPOSE CONFIGURATION REGISTERS TO THE DMA ENGINE ---
+    // We use continuous assignment to constantly send the register values to the DMA engine.
+    assign dma_start       = control_reg[0]; // The start bit is just bit 0 of the control register.
+    assign source_addr     = source_reg;     // Send the whole 32-bit source register.
+    assign dest_addr       = dest_reg;       // Send the whole 32-bit dest register.
+    assign transfer_length = length_reg;     // Send the whole 32-bit length register.
+
+    // --- CHANNEL READINESS (The VALID/READY Handshakes) ---
+    // We are ready to accept an address ONLY IF:
+    // 1. We are not in reset.
+    // 2. We haven't already saved an address (!addr_saved).
+    // 3. We aren't currently busy sending a receipt (!S_AXI_BVALID).
+    assign S_AXI_AWREADY = ARESETN && !addr_saved && !S_AXI_BVALID;
+
+    // We are ready to accept data ONLY IF:
+    // 1. We are not in reset.
+    // 2. We haven't already saved data (!data_saved).
+    // 3. We aren't currently busy sending a receipt (!S_AXI_BVALID).
+    assign S_AXI_WREADY = ARESETN && !data_saved && !S_AXI_BVALID;
+
+    // We are ready to accept a read address ONLY IF we aren't already sending read data.
+    assign S_AXI_ARREADY = ARESETN && !S_AXI_RVALID;
+
+    // --- HANDSHAKE DETECTION ---
+    // A handshake happens ONLY when both VALID and READY are high at the exact same time.
+    assign addr_handshake = S_AXI_AWVALID && S_AXI_AWREADY;
+    assign data_handshake = S_AXI_WVALID && S_AXI_WREADY;
+
+    // --- MULTIPLEXERS FOR WAITING ROOM ---
+    // If we saved an address earlier, use that. Otherwise, use the address arriving right now.
+    assign selected_addr = addr_saved ? saved_addr : S_AXI_AWADDR;
+    assign selected_data = data_saved ? saved_data : S_AXI_WDATA;
+    assign selected_strb = data_saved ? saved_strb : S_AXI_WSTRB;
+
+    // --- THE COMMIT TRIGGER ---
+    // We are ready to actually write to the memory box ONLY IF:
+    // (We have the address OR it's arriving right now) AND 
+    // (We have the data OR it's arriving right now) AND
+    // (We aren't already busy sending a receipt).
+    assign write_ready_to_commit = (addr_saved || addr_handshake) && 
+                                   (data_saved || data_handshake) && 
+                                   !S_AXI_BVALID;
+
+    // =========================================================================
+    // WRITE CHANNEL AND MEMORY BOXES
+    // =========================================================================
+    always_ff @(posedge ACLK) begin
+        if (!ARESETN) begin
+            // If reset is active (0), wipe everything to zero.
+            control_reg <= 32'd0;
+            source_reg  <= 32'd0;
+            dest_reg    <= 32'd0;
+            length_reg  <= 32'd0;
+            saved_addr  <= 32'd0;
+            saved_data  <= 32'd0;
+            saved_strb  <= 4'd0;
+            addr_saved  <= 1'b0;
+            data_saved  <= 1'b0;
+            S_AXI_BVALID <= 1'b0;
+            S_AXI_BRESP  <= RESP_OKAY;
+        end else begin
+            // 1. BACKPRESSURE HANDLING: 
+            // If we sent a receipt (BVALID=1) and the CPU accepted it (BREADY=1), drop the receipt.
+            if (S_AXI_BVALID && S_AXI_BREADY)
+                S_AXI_BVALID <= 1'b0;
+
+            // 2. CATCH THE ADDRESS (if it arrives early)
+            if (addr_handshake) begin
+                saved_addr <= S_AXI_AWADDR; // Put it in the waiting room
+                addr_saved <= 1'b1;         // Raise the "Address Saved" flag
+            end
+
+            // 3. CATCH THE DATA (if it arrives early)
+            if (data_handshake) begin
+                saved_data <= S_AXI_WDATA;  // Put it in the waiting room
+                saved_strb <= S_AXI_WSTRB;  // Save the byte strobes too
+                data_saved <= 1'b1;         // Raise the "Data Saved" flag
+            end
+
+            // 4. EXECUTE THE WRITE
+            if (write_ready_to_commit) begin
+                case (selected_addr)
+                    
+                    // If CPU wrote to 0x00 (CONTROL)
+                    REG_CONTROL: begin
+                        // WSTRB: Only update specific bytes based on the strobe!
+                        if (selected_strb[0]) control_reg[7:0]   <= selected_data[7:0];
+                        if (selected_strb[1]) control_reg[15:8]  <= selected_data[15:8];
+                        if (selected_strb[2]) control_reg[23:16] <= selected_data[23:16];
+                        if (selected_strb[3]) control_reg[31:24] <= selected_data[31:24];
+                        S_AXI_BRESP <= RESP_OKAY; // Send OK receipt
+                    end
+
+                    // If CPU wrote to 0x04 (SOURCE_ADDR)
+                    REG_SOURCE: begin
+                        if (selected_strb[0]) source_reg[7:0]   <= selected_data[7:0];
+                        if (selected_strb[1]) source_reg[15:8]  <= selected_data[15:8];
+                        if (selected_strb[2]) source_reg[23:16] <= selected_data[23:16];
+                        if (selected_strb[3]) source_reg[31:24] <= selected_data[31:24];
+                        S_AXI_BRESP <= RESP_OKAY;
+                    end
+
+                    // If CPU wrote to 0x08 (DEST_ADDR)
+                    REG_DEST: begin
+                        if (selected_strb[0]) dest_reg[7:0]   <= selected_data[7:0];
+                        if (selected_strb[1]) dest_reg[15:8]  <= selected_data[15:8];
+                        if (selected_strb[2]) dest_reg[23:16] <= selected_data[23:16];
+                        if (selected_strb[3]) dest_reg[31:24] <= selected_data[31:24];
+                        S_AXI_BRESP <= RESP_OKAY;
+                    end
+
+                    // If CPU wrote to 0x0C (LENGTH)
+                    REG_LENGTH: begin
+                        if (selected_strb[0]) length_reg[7:0]   <= selected_data[7:0];
+                        if (selected_strb[1]) length_reg[15:8]  <= selected_data[15:8];
+                        if (selected_strb[2]) length_reg[23:16] <= selected_data[23:16];
+                        if (selected_strb[3]) length_reg[31:24] <= selected_data[31:24];
+                        S_AXI_BRESP <= RESP_OKAY;
+                    end
+
+                    // INVALID ADDRESS HANDLING
+                    default: begin
+                        S_AXI_BRESP <= RESP_SLVERR; // Send an ERROR receipt!
+                    end
+                endcase
+
+                // 5. CLEAN UP THE WAITING ROOM
+                // Since we just executed the write, we can empty the waiting room.
+                addr_saved   <= 1'b0;
+                data_saved   <= 1'b0;
+                
+                // 6. SEND THE RECEIPT
+                S_AXI_BVALID <= 1'b1; // Tell the CPU: "I'm done, take your receipt."
+            end
+        end
+    end
+
+    // =========================================================================
+    // READ CHANNEL (The Info Window)
+    // =========================================================================
+    always_ff @(posedge ACLK) begin
+        if (!ARESETN) begin
+            S_AXI_RDATA  <= 32'd0;
+            S_AXI_RRESP  <= RESP_OKAY;
+            S_AXI_RVALID <= 1'b0;
+        end else begin
+            // BACKPRESSURE: If CPU accepted the read data, drop the RVALID flag.
+            if (S_AXI_RVALID && S_AXI_RREADY)
+                S_AXI_RVALID <= 1'b0;
+
+            // Did the CPU ask to read an address? (Handshake)
+            if (S_AXI_ARVALID && S_AXI_ARREADY) begin
+                case (S_AXI_ARADDR)
+                    
+                    // Send the CONTROL data
+                    REG_CONTROL: begin
+                        S_AXI_RDATA <= control_reg;
+                        S_AXI_RRESP <= RESP_OKAY;
+                    end
+
+                    // Send the SOURCE_ADDR data
+                    REG_SOURCE: begin
+                        S_AXI_RDATA <= source_reg;
+                        S_AXI_RRESP <= RESP_OKAY;
+                    end
+
+                    // Send the DEST_ADDR data
+                    REG_DEST: begin
+                        S_AXI_RDATA <= dest_reg;
+                        S_AXI_RRESP <= RESP_OKAY;
+                    end
+
+                    // Send the LENGTH data
+                    REG_LENGTH: begin
+                        S_AXI_RDATA <= length_reg;
+                        S_AXI_RRESP <= RESP_OKAY;
+                    end
+
+                    // BUILD STATUS LIVE FROM THE DMA ENGINE WIRES
+                    REG_STATUS: begin
+                        // Concatenate: 29 zeros, then error, done, and busy.
+                        S_AXI_RDATA <= {29'd0, dma_error, dma_done, dma_busy};
+                        S_AXI_RRESP <= RESP_OKAY;
+                    end
+
+                    // BUILD IRQ LIVE FROM THE DMA ENGINE WIRES
+                    REG_IRQ: begin
+                        // Concatenate: 31 zeros, then the IRQ status bit.
+                        S_AXI_RDATA <= {31'd0, irq_status};
+                        S_AXI_RRESP <= RESP_OKAY;
+                    end
+
+                    // INVALID ADDRESS
+                    default: begin
+                        S_AXI_RDATA <= 32'd0;       // Return 0
+                        S_AXI_RRESP <= RESP_SLVERR; // Send an ERROR receipt!
+                    end
+                endcase
+
+                // Tell the CPU: "Here is your data!"
+                S_AXI_RVALID <= 1'b1; 
+            end
+        end
+    end
+endmodule

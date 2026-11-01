@@ -1,0 +1,43 @@
+[*]
+[*] GTKWave Analyzer v3.3.108 (w)1999-2020 BSI
+[*] Sun Nov 01 10:01:03 2026
+[*]
+[dumpfile] "C:\AXI4-Lite DMA Controller\gtk waves\dma_top.vcd"
+[savefile] "C:\AXI4-Lite DMA Controller\gtk waves\gtk.gtkw"
+[timestart] 0
+[size] 1920 957
+[pos] -1 -1
+*-16.529808 333500 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] tb_dma_top.
+[treeopen] tb_dma_top.DUT.
+[treeopen] tb_dma_top.DUT.dma_controller.
+[sst_width] 318
+[signals_width] 350
+[sst_expanded] 1
+[sst_vpaned_height] 277
+@28
+tb_dma_top.ACLK
+tb_dma_top.ARESETN
+@29
+tb_dma_top.dma_busy
+@28
+tb_dma_top.done_seen
+tb_dma_top.dma_busy
+tb_dma_top.dma_done
+tb_dma_top.dma_error
+tb_dma_top.error_seen
+@22
+tb_dma_top.mem_rd_addr[31:0]
+tb_dma_top.mem_rd_data[31:0]
+@28
+tb_dma_top.mem_rd_en
+tb_dma_top.mem_rd_valid
+@22
+tb_dma_top.mem_wr_addr[31:0]
+tb_dma_top.mem_wr_data[31:0]
+@28
+tb_dma_top.mem_wr_en
+tb_dma_top.mem_wr_ready
+tb_dma_top.irq
+[pattern_trace] 1
+[pattern_trace] 0

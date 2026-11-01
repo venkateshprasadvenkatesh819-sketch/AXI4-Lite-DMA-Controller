@@ -1,0 +1,135 @@
+
+8. Printing statistics.
+
+=== $paramod$8351ceffb383e6b84a7cde1b18c7591ca0163908\dma_engine ===
+
+        +----------Local Count, excluding submodules.
+        | 
+      291 wires
+     1064 wire bits
+       28 public wires
+      437 public wire bits
+       17 ports
+      234 port bits
+      637 cells
+        9   $_ANDNOT_
+      156   $_AND_
+      128   $_DFFE_PN0P_
+        6   $_DFF_PN0_
+        1   $_DFF_PN1_
+       60   $_MUX_
+       10   $_NAND_
+       34   $_NOR_
+       37   $_NOT_
+        2   $_ORNOT_
+       42   $_OR_
+       64   $_XNOR_
+       88   $_XOR_
+        1 submodules
+        1   $paramod$f598541484e127923450ee94742b118aa8cbeea8\sync_fifo
+
+=== $paramod$f598541484e127923450ee94742b118aa8cbeea8\sync_fifo ===
+
+        +----------Local Count, excluding submodules.
+        | 
+     1060 wires
+     1663 wire bits
+       29 public wires
+      597 public wire bits
+        8 ports
+       70 port bits
+     1627 cells
+       89   $_ANDNOT_
+      618   $_AND_
+       45   $_DFFE_PN0P_
+      512   $_DFFE_PP_
+       32   $_MUX_
+       47   $_NAND_
+      249   $_NOR_
+        6   $_NOT_
+        8   $_ORNOT_
+        9   $_OR_
+        7   $_XNOR_
+        5   $_XOR_
+
+=== axi_lite_regs ===
+
+        +----------Local Count, excluding submodules.
+        | 
+      449 wires
+      925 wire bits
+       42 public wires
+      518 public wire bits
+       27 ports
+      249 port bits
+      715 cells
+        7   $_ANDNOT_
+      221   $_AND_
+       68   $_MUX_
+       45   $_NAND_
+      110   $_NOR_
+        8   $_NOT_
+        1   $_ORNOT_
+       21   $_OR_
+      232   $_SDFFE_PN0P_
+        2   $_SDFFE_PP0P_
+
+=== dma_top ===
+
+        +----------Local Count, excluding submodules.
+        | 
+       37 wires
+      383 wire bits
+       37 public wires
+      383 public wire bits
+       31 ports
+      284 port bits
+        3 cells
+        1   $_ANDNOT_
+        1   $_DFF_PN0_
+        1   $_OR_
+        2 submodules
+        1   $paramod$8351ceffb383e6b84a7cde1b18c7591ca0163908\dma_engine
+        1   axi_lite_regs
+
+=== design hierarchy ===
+
+        +----------Count including submodules.
+        | 
+     2982 dma_top
+      637 $paramod$8351ceffb383e6b84a7cde1b18c7591ca0163908\dma_engine
+     1627   $paramod$f598541484e127923450ee94742b118aa8cbeea8\sync_fifo
+      715 axi_lite_regs
+
+        +----------Count including submodules.
+        | 
+     1837 wires
+     4035 wire bits
+      136 public wires
+     1935 public wire bits
+       83 ports
+      837 port bits
+        - memories
+        - memory bits
+        - processes
+     2982 cells
+      106   $_ANDNOT_
+      995   $_AND_
+      173   $_DFFE_PN0P_
+      512   $_DFFE_PP_
+        7   $_DFF_PN0_
+        1   $_DFF_PN1_
+      160   $_MUX_
+      102   $_NAND_
+      393   $_NOR_
+       51   $_NOT_
+       11   $_ORNOT_
+       73   $_OR_
+      232   $_SDFFE_PN0P_
+        2   $_SDFFE_PP0P_
+       71   $_XNOR_
+       93   $_XOR_
+        2 submodules
+        1   $paramod$8351ceffb383e6b84a7cde1b18c7591ca0163908\dma_engine
+        1   axi_lite_regs
+
